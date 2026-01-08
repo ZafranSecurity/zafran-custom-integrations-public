@@ -72,14 +72,14 @@ message InstanceTagKeyValue {
   string value = 2;
 }
 
-message InstanceTagLabel {
+message InstanceLabel {
   string label = 1;
 }
 
 message InstanceTag {
   oneof tag {
     InstanceTagKeyValue key_value = 1;
-    InstanceTagLabel label = 2;
+    InstanceLabel label = 2;
   }
 }
 
@@ -91,8 +91,17 @@ message InstanceData {
   repeated InstanceIdentifier identifiers = 5;
   map<string, InstancePropertyValue> instance_properties = 6;
   InetEvidence inet_evidence = 7;
-  repeated InstanceTag tags = 8;
+  repeated InstanceTag tags = 8; // deprecated
   google.protobuf.Timestamp source_last_seen = 9;
+  repeated SBOMComponent sbom_components = 10;
+  repeated InstanceLabel labels = 11;
+  repeated InstanceTagKeyValue key_value_tags = 12;
+}
+
+// SBOM Component for standalone software inventory
+message SBOMComponent {
+  Component component = 1;
+  repeated string file_paths = 2;
 }
 
 // Vulnerability data structures
