@@ -44,6 +44,17 @@ enum ComponentType {
   PLATFORM = 13;
 }
 
+enum InstanceType {
+  INSTANCE_TYPE_UNKNOWN = 0;
+  INSTANCE_TYPE_MACHINE = 1;
+  INSTANCE_TYPE_CONTAINER_IMAGE = 2;
+  INSTANCE_TYPE_SERVERLESS = 3;
+  INSTANCE_TYPE_MOBILE_DEVICE = 4;
+  INSTANCE_TYPE_NETWORK_DEVICE = 5;
+  INSTANCE_TYPE_OT_IOT_DEVICE = 6;
+  INSTANCE_TYPE_DATA_STORE = 7;
+}
+
 // Instance data structures
 message InstanceIdentifier {
   IdentifierType key = 1;
@@ -91,11 +102,12 @@ message InstanceData {
   repeated InstanceIdentifier identifiers = 5;
   map<string, InstancePropertyValue> instance_properties = 6;
   InetEvidence inet_evidence = 7;
-  repeated InstanceTag tags = 8; // deprecated
+  repeated InstanceTag tags = 8 [deprecated = true];
   google.protobuf.Timestamp source_last_seen = 9;
   repeated SBOMComponent sbom_components = 10;
   repeated InstanceLabel labels = 11;
   repeated InstanceTagKeyValue key_value_tags = 12;
+  InstanceType instance_type = 13;
 }
 
 // SBOM Component for standalone software inventory
@@ -116,12 +128,15 @@ message Component {
 message Remediation {
   string suggestion = 1;
   string source = 2;
+  string fixed_in_version = 3;  // Version in which the vulnerability is fixed
 }
 
 message CVSS {
   string version = 1;
   string vector = 2;
   double base_score = 3;
+  string source = 4;  // Source of the CVSS score (e.g., "nvd", "vendor")
+  string type = 5;    // Type of CVSS (e.g., "primary", "secondary")
 }
 
 message Vulnerability {
@@ -133,4 +148,14 @@ message Vulnerability {
   repeated CVSS CVSS = 6;
   repeated int64 cwe_ids = 7;
   string description = 8;
+  google.protobuf.Timestamp first_observed = 9;
+  google.protobuf.Timestamp last_observed = 10;
+  repeated string file_paths = 11;
+  // ScannerSource fields
+  string scanner_id = 12;      // Original finding ID from the scanner (e.g., "QID-86516")
+  string external_url = 13;    // URL to the finding in the scanner
+  string references_url = 14;  // Reference URL for the vulnerability
+  string scanner_name = 15;    // Name/title from the scanner
+  // Additional metadata
+  string severity = 16;        // Severity level (e.g., "critical", "high", "medium", "low")
 }
