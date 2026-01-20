@@ -16,6 +16,8 @@ enum IdentifierType {
   WINDOWS_CS_UUID = 5;
   LINUX_UUID = 6;
   SERIAL_NUMBER = 7;
+  TENABLE_UUID = 8;
+  CROWDSTRIKE_AID = 9;
 }
 
 enum InstancePropertyType {
@@ -53,6 +55,8 @@ enum InstanceType {
   INSTANCE_TYPE_NETWORK_DEVICE = 5;
   INSTANCE_TYPE_OT_IOT_DEVICE = 6;
   INSTANCE_TYPE_DATA_STORE = 7;
+  INSTANCE_TYPE_CODE_PROJECT = 8;
+  INSTANCE_TYPE_WEB_APP_API = 9;
 }
 
 // Instance data structures
@@ -128,15 +132,15 @@ message Component {
 message Remediation {
   string suggestion = 1;
   string source = 2;
-  string fixed_in_version = 3;  // Version in which the vulnerability is fixed
+  string fixed_in_version = 3; // Version in which the vulnerability is fixed
 }
 
 message CVSS {
   string version = 1;
   string vector = 2;
   double base_score = 3;
-  string source = 4;  // Source of the CVSS score (e.g., "nvd", "vendor")
-  string type = 5;    // Type of CVSS (e.g., "primary", "secondary")
+  string source = 4; // Source of the CVSS score (e.g., "nvd", "vendor")
+  string type = 5; // Type of CVSS (e.g., "primary", "secondary")
 }
 
 message Vulnerability {
@@ -152,10 +156,10 @@ message Vulnerability {
   google.protobuf.Timestamp last_observed = 10;
   repeated string file_paths = 11;
   // ScannerSource fields
-  string scanner_id = 12;      // Original finding ID from the scanner (e.g., "QID-86516")
-  string external_url = 13;    // URL to the finding in the scanner
-  string references_url = 14;  // Reference URL for the vulnerability
-  string scanner_name = 15;    // Name/title from the scanner
+  string scanner_id = 12; // Original finding ID from the scanner (e.g., "QID-86516")
+  string external_url = 13; // URL to the finding in the scanner
+  string references_url = 14; // Reference URL for the vulnerability
+  string scanner_name = 15; // Name/title from the scanner
   // Additional metadata
-  string severity = 16;        // Severity level (e.g., "critical", "high", "medium", "low")
+  string severity = 16; // Severity level (e.g., "critical", "high", "medium", "low")
 }

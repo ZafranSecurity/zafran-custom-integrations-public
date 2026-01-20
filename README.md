@@ -1,21 +1,20 @@
 # Starlark Runner
 
-A command-line tool for executing and testing Starlark integration scripts.
+A command-line tool for executing and testing Starlark integration scripts using the ScriptExecutor.
 
 ## Features
 
 - Execute Starlark scripts with parameter passing
 - JSON output of collected instances and vulnerabilities
-- Full module support (http, json, crypto, etc.)
+- Full module support (http, json, crypto, etc.) via the ScriptExecutor
 - Script validation and error reporting
 
-## Platform Compatibility
+## Building
 
-Two binaries are provided:
-- `starlark-runner` - For Linux systems
-- `starlark-runner-mac` - For macOS systems
-
-Use the appropriate binary for your operating system. All examples below use `starlark-runner`, but macOS users should substitute with `starlark-runner-mac`.
+```bash
+cd apps/collection/sync_cloud_services
+go build -o cmd/starlark-runner/starlark-runner ./cmd/starlark-runner
+```
 
 ## Usage
 
@@ -23,11 +22,7 @@ Use the appropriate binary for your operating system. All examples below use `st
 
 Execute a script and output results to stdout:
 ```bash
-# Linux
 ./starlark-runner -script example.star
-
-# macOS
-./starlark-runner-mac -script example.star
 ```
 
 Execute with parameters:
@@ -42,10 +37,9 @@ Save output to file:
 
 ### Command Line Options
 
-- `-script` - Path to the Starlark script file (required for normal execution)
+- `-script` - Path to the Starlark script file (required)
 - `-output` - Optional output file for JSON results (default: stdout)
 - `-params` - Comma-separated key=value parameters to pass to the script
-- `-repl` - Start interactive REPL mode (see [REPL Mode](#repl-mode))
 - `-help` - Show help message
 
 ### Script Requirements
@@ -79,7 +73,7 @@ Any additional configuration values should be defined as constants within the sc
 
 ### Available Modules
 
-The following modules are available:
+All modules from the ScriptExecutor are available:
 
 - `http` - HTTP client for API calls
 - `json` - JSON encoding/decoding
@@ -98,8 +92,9 @@ The following modules are available:
 The `zafran` module is the primary interface for creating and collecting instances and vulnerabilities:
 
 - `zafran.proto_file` - Access to all proto message types and enums
-- `zafran.collect_instance(instance)` - Collect an instance (max 10,000 per execution)
-- `zafran.collect_vulnerability(vuln)` - Collect a vulnerability (max 1,000,000 per execution)
+- `zafran.collect_instance(instance)` - Collect an instance (max 100,000 per flush)
+- `zafran.collect_vulnerability(vuln)` - Collect a vulnerability (max 1,000,000 per flush)
+- `zafran.flush()` - Send collected data and clear the in-memory store (see below)
 
 #### Proto Types Available via zafran.proto_file:
 
@@ -110,6 +105,7 @@ The `zafran` module is the primary interface for creating and collecting instanc
 - `InstancePropertyValue` - Property value with type
 - `InstanceTag` - Tag with key/value or label
 - `InetEvidence` - Internet-facing evidence
+- `SBOMComponent` - Software Bill of Materials component for software inventory
 
 **Vulnerability Types:**
 - `Vulnerability` - Main vulnerability structure
@@ -121,6 +117,72 @@ The `zafran` module is the primary interface for creating and collecting instanc
 - `IdentifierType` - AWS_EC2_INSTANCE_ID, AZURE_VM_ID, etc.
 - `InstancePropertyType` - STRING, INT, FLOAT, BOOL, DATETIME
 - `ComponentType` - APPLICATION, LIBRARY, OPERATING_SYSTEM, etc.
+- `InstanceType` - MACHINE, CONTAINER_IMAGE, SERVERLESS, etc.
+
+#### Using zafran.flush()
+
+The `zafran.flush()` function sends all collected instances and vulnerabilities to Zafran and clears the in-memory store. This is useful for:
+
+- **Large datasets**: Avoid accumulating all data in memory by flushing periodically
+- **Paginated APIs**: Flush after processing each page of results
+- **Long-running scripts**: Send data incrementally instead of all at once at the end
+
+**Behavior:**
+- Sends all collected instances and their associated vulnerabilities
+- Clears the in-memory store after successful send
+- Returns `None` on success
+- If called with no instances collected, it's a no-op (orphan vulnerabilities are dropped with a warning)
+- Any unflushed data is automatically sent when the script completes (backward compatible)
+
+**Example with paginated API:**
+
+```python
+load("zafran", "zafran")
+load("http", "http")
+
+def main(**kwargs):
+    pb = zafran.proto_file
+    api_url = kwargs.get("api_url", "")
+    api_key = kwargs.get("api_key", "")
+
+    page = 1
+    while True:
+        response = http.get(
+            api_url + "/assets?page=" + str(page),
+            headers={"Authorization": "Bearer " + api_key}
+        )
+        data = response.json()
+
+        if not data.get("items"):
+            break
+
+        for item in data["items"]:
+            # Collect instance
+            instance = pb.InstanceData(
+                instance_id=item["id"],
+                name=item["name"],
+                operating_system=item.get("os", "")
+            )
+            zafran.collect_instance(instance)
+
+            # Collect vulnerabilities for this instance
+            for vuln in item.get("vulnerabilities", []):
+                v = pb.Vulnerability(
+                    instance_id=item["id"],
+                    cve=vuln["cve"],
+                    description=vuln.get("description", "")
+                )
+                zafran.collect_vulnerability(v)
+
+        # Flush after each page to avoid memory buildup
+        zafran.flush()
+        page += 1
+```
+
+**Important notes:**
+- Always collect instances before their associated vulnerabilities
+- Vulnerabilities reference instances by `instance_id` - if you flush vulnerabilities without their instances, they will be dropped
+- The instance/vulnerability limits (100,000 and 1,000,000) apply per flush, not globally
 
 ### Example Script
 
@@ -156,7 +218,23 @@ The tool outputs JSON with the following structure:
         }
       ],
       "instance_properties": {},
-      "tags": []
+      "labels": ["production", "critical"],
+      "key_value_tags": {
+        "environment": "production",
+        "team": "platform"
+      },
+      "sbom_components": [
+        {
+          "component": {
+            "type": 1,  // APPLICATION
+            "product": "com.google.Chrome",
+            "vendor": "Google",
+            "version": "120.0.6099.129",
+            "display_name": "Google Chrome"
+          },
+          "file_paths": ["/Applications/Google Chrome.app"]
+        }
+      ]
     }
   ],
   "vulnerabilities": [
@@ -213,19 +291,28 @@ instance = pb.InstanceData(
             scanner_type="my-scanner"
         )
     ],
-    tags=[
-        # Key-value tag
-        pb.InstanceTag(key_value=pb.InstanceTagKeyValue(
-            key="environment",
-            value="production"
-        )),
-        # Label tag
-        pb.InstanceTag(label=pb.InstanceTagLabel(
-            label="critical"
-        ))
+    labels=[
+      pb.InstanceLabel(label="production"),
+      pb.InstanceLabel(label="critical")
+    ],
+    key_value_tags=[
+      pb.InstanceTagKeyValue(
+        key="environment",
+        value="production"
+      ),
+      pb.InstanceTagKeyValue(
+        key="team",
+        value="platform"
+      )
     ]
 )
+```
 
+**Tag Types:**
+- **Key-value tags**: Use `InstanceTag(key_value=InstanceTagKeyValue(key="...", value="..."))`. The `value` field is required and must not be empty.
+- **Label tags**: Use `InstanceTag(label=InstanceTagLabel(label="..."))`. These are simple labels without a value.
+
+```python
 # Collect the instance
 zafran.collect_instance(instance)
 
@@ -256,6 +343,54 @@ vuln = pb.Vulnerability(
 zafran.collect_vulnerability(vuln)
 ```
 
+### Adding SBOM Components to Instances
+
+SBOM (Software Bill of Materials) components can be attached to instances to track installed software. This is useful for integrations that collect software inventory (e.g., MDM systems like Jamf):
+
+```python
+load("zafran", "zafran")
+
+pb = zafran.proto_file
+
+# Create SBOM components for installed software
+sbom_components = []
+
+# Add an application
+sbom_components.append(pb.SBOMComponent(
+    component=pb.Component(
+        type=pb.ComponentType.APPLICATION,
+        product="com.google.Chrome",  # Bundle ID or package name
+        vendor="Google",
+        version="120.0.6099.129",
+        display_name="Google Chrome"
+    ),
+    file_paths=["/Applications/Google Chrome.app"]
+))
+
+# Add a library
+sbom_components.append(pb.SBOMComponent(
+    component=pb.Component(
+        type=pb.ComponentType.LIBRARY,
+        product="openssl",
+        vendor="openssl",
+        version="3.0.12"
+    ),
+    file_paths=["/usr/lib/libssl.so"]
+))
+
+# Create instance with SBOM components
+instance = pb.InstanceData(
+    instance_id="device-001",
+    name="workstation-01",
+    operating_system="macOS 14.2",
+    sbom_components=sbom_components
+)
+
+zafran.collect_instance(instance)
+```
+
+Note: SBOM components are for tracking software inventory on instances. For reporting vulnerabilities associated with software, use `zafran.collect_vulnerability()` instead.
+
 ## Testing Scripts
 
 1. Create your Starlark script following the pattern in `example.star`
@@ -266,7 +401,7 @@ zafran.collect_vulnerability(vuln)
 
 ### REPL Mode
 
-The tool supports REPL (Read-Eval-Print Loop) mode for interactive script development and testing:
+The tool now supports REPL (Read-Eval-Print Loop) mode for interactive script development and testing:
 
 ```bash
 # Start REPL mode
@@ -288,3 +423,8 @@ In REPL mode, you have access to:
   - `save_collected(file)` - Save collected data to JSON file
   - `quit()` or Ctrl+D - Exit REPL mode
 
+## Future Enhancements
+
+- Better error messages with line numbers
+- Script validation before execution
+- Support for loading scripts from URLs or S3
