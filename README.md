@@ -9,12 +9,6 @@ A command-line tool for executing and testing Starlark integration scripts using
 - Full module support (http, json, crypto, etc.) via the ScriptExecutor
 - Script validation and error reporting
 
-## Building
-
-```bash
-cd apps/collection/sync_cloud_services
-go build -o cmd/starlark-runner/starlark-runner ./cmd/starlark-runner
-```
 
 ## Usage
 
