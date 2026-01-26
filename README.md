@@ -12,21 +12,34 @@ A command-line tool for executing and testing Starlark integration scripts using
 
 ## Usage
 
+## Binary Name by Operating System
+The Starlark Runner binary name depends on your operating system:
+
+| OS     | Binary name              |
+|--------|--------------------------|
+| Linux  | `starlark-runner-linux`  |
+| macOS  | `starlark-runner-mac`    |
+
+Throughout this README, examples assume you are using the correct binary for your OS.
+
 ### Running a Script
 
 Execute a script and output results to stdout:
 ```bash
-./starlark-runner -script example.star
+./starlark-runner-linux -script example.star
+./starlark-runner-mac -script example.star
 ```
 
 Execute with parameters:
 ```bash
-./starlark-runner -script example.star -params "api_url=https://api.example.com,api_key=secret"
+./starlark-runner-linux -script example.star -params "api_url=https://api.example.com,api_key=secret"
+./starlark-runner-mac -script example.star -params "api_url=https://api.example.com,api_key=secret"
 ```
 
 Save output to file:
 ```bash
-./starlark-runner -script example.star -output results.json
+./starlark-runner-linux -script example.star -output results.json
+./starlark-runner-mac -script example.star -output results.json
 ```
 
 ### Command Line Options
@@ -399,13 +412,16 @@ The tool now supports REPL (Read-Eval-Print Loop) mode for interactive script de
 
 ```bash
 # Start REPL mode
-./starlark-runner -repl
+./starlark-runner-linux -repl
+./starlark-runner-mac -repl
 
 # Start REPL with pre-loaded script
-./starlark-runner -repl -script example.star
+./starlark-runner-linux -repl -script example.star
+./starlark-runner-mac -repl -script example.star
 
 # Start REPL with pre-loaded script and parameters
-./starlark-runner -repl -script example.star -params "api_url=https://api.example.com"
+./starlark-runner-linux -repl -script example.star -params "api_url=https://api.example.com"
+./starlark-runner-mac -repl -script example.star -params "api_url=https://api.example.com"
 ```
 
 In REPL mode, you have access to:
