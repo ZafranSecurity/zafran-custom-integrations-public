@@ -292,6 +292,18 @@ message ControlAssociationData {
   repeated string forwarding_rule_ids = 4; // rule_id values from forwarding rules this control protects (WAF/LB).
 }
 
+// CustomThreatIntelEntry is one CVE-level threat-intel row emitted via
+// collect_threat_intel. The natural key is `cve`; uniqueness is scoped to the
+// calling integration server-side. `context` is a plain string the script
+// owns end-to-end — typically JSON encoding richer vendor metadata, but the
+// normalizer makes no assumptions about its shape.
+message CustomThreatIntelEntry {
+  string cve = 1;
+  bool exploited_in_the_wild = 2;
+  bool has_public_exploit = 3;
+  string context = 4;
+}
+
 // HttpErrorDetails holds structured HTTP error info that scripts can report.
 message HttpErrorDetails {
   string error = 1;
