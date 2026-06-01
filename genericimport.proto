@@ -21,6 +21,7 @@ enum IdentifierType {
   REPO_NAME = 10;
   ILLUMIO_AGENT_UUID = 11;
   QUALYS_AGENT_ID = 12;
+  IMAGE_DIGEST = 13;
 }
 
 enum InstancePropertyType {
