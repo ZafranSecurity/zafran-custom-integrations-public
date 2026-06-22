@@ -137,6 +137,11 @@ message InstanceData {
   // Per-instance runtime data — flows into NormalizedRawScan.Processes
   // alongside the in_runtime synthetic processes built from vulnerabilities.
   repeated Process processes = 18;
+
+  // IDs of controls created by other integrations to link to this instance.
+  // Used as-is (no integration-ID prefix), so the caller must supply the full control name.
+  // Unlike control_ids, these are looked up read-only — the referenced control must already exist.
+  repeated string global_control_ids = 19;
 }
 
 // SBOM Component for standalone software inventory
