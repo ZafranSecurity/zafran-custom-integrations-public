@@ -284,8 +284,6 @@ message NetworkEntity {
 
 // Forwarding rule data for network forwarding/NAT rules
 // These rules describe how traffic is forwarded between network entities.
-// The rule_type will be automatically prefixed with "custom_" and the integration's
-// product name to create the forwarding rule type (e.g., "custom_jamf").
 message ForwardingRuleData {
   string rule_id = 1;                     // Unique rule identifier within this integration (required)
   NetworkEntity source = 2;               // Source network entity (required)
@@ -293,6 +291,11 @@ message ForwardingRuleData {
   bool is_bidirectional = 4;              // Whether the rule applies in both directions
   map<string, string> properties = 5;     // Optional custom properties for the rule
   string raw_response = 6; // Raw HTTP response body returned by the API before parsing
+  // Optional free-form forwarding rule type defined by the integration (e.g.
+  // "fortinet_firewall"). It is stored as-is and is not validated against any
+  // enum by the normalizer or network processor. When empty, the rule type
+  // defaults to "generic".
+  string rule_type = 7;
 }
 
 // Control-to-target association. Targets are subnets (firewalls/IDS) and/or
