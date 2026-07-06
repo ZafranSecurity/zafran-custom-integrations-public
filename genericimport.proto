@@ -205,6 +205,10 @@ message Vulnerability {
   map<string, string> dynamic_properties = 17; // Scanner-specific key-value metadata (e.g., detection score, result text)
   string raw_response = 18; // Raw HTTP response body returned by the API before parsing
   repeated VulnerabilitySource vulnerability_sources = 19; // Scanner-specific finding identities for original_source_id filtering and remediation linking
+  // Multiple components affected by this vulnerability. When non-empty, takes precedence over the singular
+  // `component` field. Allows a single CVE record to carry all its affected components (e.g. OS + application)
+  // rather than requiring one message per component.
+  repeated Component components = 20;
 }
 
 // Control type enum - matches db interfaces ControlType
