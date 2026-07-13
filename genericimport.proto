@@ -132,7 +132,7 @@ message InstanceData {
   repeated string control_ids = 14;  // IDs of controls to link to this instance (unique per integration)
   ControlType control_type = 15; // required when control ids are specified
   string raw_response = 16; // Optional: raw HTTP response body returned by the API before parsing
-  string hostname = 17; // Optional: short hostname or FQDN. Used as an identifier for asset deduplication — prefer setting this to the most stable network identity of the instance (e.g. FQDN) when available.
+  string hostname = 17; // Optional: short hostname or FQDN. Used as an identifier for asset deduplication — prefer setting this to the most stable network identity of the instance (e.g. FQDN) when available. This must be the device's own network hostname, NOT a URL or asset scanned by an external scanner (e.g. an EASM/attack-surface tool) — a scanned URL is not a hostname and must be left empty.
 
   // Per-instance runtime data — flows into NormalizedRawScan.Processes
   // alongside the in_runtime synthetic processes built from vulnerabilities.
