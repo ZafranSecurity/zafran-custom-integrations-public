@@ -80,6 +80,13 @@ message InstanceIdentifier {
   string value = 2;
 }
 
+// CrossIntegrationMerge declares a 1:1 link from this instance to an existing
+// asset reported by another integration.
+message CrossIntegrationMerge {
+  int64 target_integration_id = 1;
+  string target_integration_instance_id = 2;
+}
+
 message InstancePropertyValue {
   string value = 1;
   InstancePropertyType type = 2;
@@ -142,6 +149,9 @@ message InstanceData {
   // Used as-is (no integration-ID prefix), so the caller must supply the full control name.
   // Unlike control_ids, these are looked up read-only — the referenced control must already exist.
   repeated string global_control_ids = 19;
+
+  // Explicit 1:1 links to existing assets reported by other integrations.
+  repeated CrossIntegrationMerge cross_integration_merges = 20;
 }
 
 // SBOM Component for standalone software inventory
