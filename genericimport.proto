@@ -324,6 +324,10 @@ message ControlAssociationData {
   ControlType control_type = 2;            // Must match the type used in collect_control for this control_id.
   repeated string subnet_cidrs = 3;        // Flat IPv4 CIDRs only; 0.0.0.0/0 and non-IPv4 are dropped.
   repeated string forwarding_rule_ids = 4; // rule_id values from forwarding rules this control protects (WAF/LB).
+  // Bare Kubernetes workload/Deployment names (no namespace/cluster) this control protects — e.g. the
+  // nginx ingress-controller a WAF module runs inside. Matched against the router-workload names stamped
+  // on reachability k8s_route forwarding rules, so the control attaches to the routes that workload fronts.
+  repeated string workload_names = 5;
 }
 
 // CustomThreatIntelEntry is one CVE-level threat-intel row emitted via
