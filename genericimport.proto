@@ -33,6 +33,7 @@ enum IdentifierType {
   WIZ_GRAPH_ENTITY_ID = 22;
   GCP_INSTANCE_ID = 23;
   AWS_ARN = 24;
+  DOMAIN = 25;
 }
 
 enum InstancePropertyType {
