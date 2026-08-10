@@ -317,6 +317,20 @@ message ForwardingRuleData {
   string rule_type = 7;
 }
 
+// ExposedEntityData describes a network entity directly reachable from the Internet — the asset
+// has a listening port with no fronting device (firewall/load balancer/WAF) the integration itself
+// models as a separate hop. Emitted via collect_exposed_entity. Distinct from ForwardingRuleData,
+// which requires both a source and a destination: an exposed entity has neither — it terminates
+// the reachability path at "the Internet" itself, the same way the native IONIX integration's
+// reachability graph feed works.
+message ExposedEntityData {
+  NetworkEntity entity = 1;      // The exposed entity (required)
+  repeated int32 ports = 2;      // Open/listening ports found on the entity
+  // Addresses the entity currently resolves to, when entity.type is NETWORK_ENTITY_TYPE_DOMAIN.
+  // Not CDN/proxy origins — only addresses actually reachable at this domain.
+  repeated string resolves_to = 3;
+}
+
 // Control-to-target association. Targets are subnets (firewalls/IDS) and/or
 // forwarding rules (WAFs/LBs, where a policy is bound to a domain or similar
 // entity that we normalize into a forwarding rule). control_product is derived
