@@ -62,6 +62,32 @@ enum ComponentType {
   PLATFORM = 13;
 }
 
+// ScanType mirrors common/findingtypes.ScanType (the UVM taxonomy source of truth). Keep in sync.
+enum ScanType {
+  SCAN_TYPE_UNSPECIFIED = 0;
+  INFRASTRUCTURE = 1;
+  SCA = 2;
+  EASM = 3;
+  CLOUD_MISCONFIGURATIONS = 4;
+  SAST = 5;
+  DAST_WAS = 6;
+  SECRETS = 7;
+  IAC = 8;
+  DSPM = 9;
+  COMPLIANCE = 10;
+  PENTEST_BUG_BOUNTY = 11;
+  CICD = 12;
+}
+
+// FindingType mirrors common/findingtypes.FindingType (the UVM taxonomy source of truth). Keep in sync.
+enum FindingType {
+  FINDING_TYPE_UNSPECIFIED = 0;
+  VULNERABILITY = 1;
+  MISCONFIGURATION = 2;
+  DATA_RISK = 3;
+  SECRET = 4;
+}
+
 enum InstanceType {
   INSTANCE_TYPE_UNKNOWN = 0;
   INSTANCE_TYPE_MACHINE = 1;
@@ -224,6 +250,8 @@ message Vulnerability {
   // `component` field. Allows a single CVE record to carry all its affected components (e.g. OS + application)
   // rather than requiring one message per component.
   repeated Component components = 20;
+  ScanType scan_type = 21; // UVM scan type
+  FindingType finding_type = 22; // UVM finding type
 }
 
 // Control type enum - matches db interfaces ControlType
