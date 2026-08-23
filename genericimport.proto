@@ -375,6 +375,11 @@ message ControlAssociationData {
   // nginx ingress-controller a WAF module runs inside. Matched against the router-workload names stamped
   // on reachability k8s_route forwarding rules, so the control attaches to the routes that workload fronts.
   repeated string workload_names = 5;
+  // Domain names this control protects — e.g. the hostnames a cloud WAF's site/zone/property covers.
+  // Matched against DomainEntity vertices in the reachability graph, so the control reaches whatever
+  // those names resolve to. Use this for WAFs that know their protected hostnames but not the backend
+  // addresses behind them; it is complementary to forwarding_rule_ids, not a replacement.
+  repeated string domains = 6;
 }
 
 // CustomThreatIntelEntry is one CVE-level threat-intel row emitted via
