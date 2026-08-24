@@ -34,6 +34,7 @@ enum IdentifierType {
   GCP_INSTANCE_ID = 23;
   AWS_ARN = 24;
   DOMAIN = 25;
+  QUALYS_ASSET_ID = 26;
 }
 
 enum InstancePropertyType {
