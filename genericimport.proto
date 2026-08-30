@@ -324,6 +324,8 @@ enum NetworkEntityType {
   NETWORK_ENTITY_TYPE_IP = 1;
   NETWORK_ENTITY_TYPE_RANGE = 2;
   NETWORK_ENTITY_TYPE_DOMAIN = 3;
+  // Entity is the cloud_instance_id of a ComputeInstanceData in the same NetworkStateData.
+  NETWORK_ENTITY_TYPE_COMPUTE_INSTANCE = 4;
 }
 
 // Network entity represents a source or destination in a forwarding rule
@@ -383,6 +385,110 @@ message ControlAssociationData {
   // those names resolve to. Use this for WAFs that know their protected hostnames but not the backend
   // addresses behind them; it is complementary to forwarding_rule_ids, not a replacement.
   repeated string domains = 6;
+}
+
+// CloudProvider of a compute instance or security group (mirrors forwardingrules.CloudProvider).
+enum CloudProvider {
+  CLOUD_PROVIDER_UNSPECIFIED = 0;
+  CLOUD_PROVIDER_AWS = 1;
+  CLOUD_PROVIDER_AZURE = 2;
+  CLOUD_PROVIDER_GCP = 3;
+}
+
+// ComputeInstanceSubtype distinguishes the kind of reachability vertex a ComputeInstanceData
+// represents. DATA_STORE covers a managed data store (e.g. an RDS instance) that is secured the
+// same way compute is — by security groups and/or a subnet NACL — and should be reachable from
+// and to compute the same way, but is not itself a workload.
+enum ComputeInstanceSubtype {
+  COMPUTE_INSTANCE_SUBTYPE_UNSPECIFIED = 0;
+  COMPUTE_INSTANCE_SUBTYPE_VM = 1;
+  COMPUTE_INSTANCE_SUBTYPE_SERVERLESS = 2;
+  COMPUTE_INSTANCE_SUBTYPE_DATA_STORE = 3;
+}
+
+message PortRange {
+  int32 from_port = 1;
+  int32 to_port = 2;
+}
+
+enum SecurityGroupSourceType {
+  SECURITY_GROUP_SOURCE_TYPE_UNSPECIFIED = 0;
+  SECURITY_GROUP_SOURCE_TYPE_SECURITY_GROUP = 1;
+  SECURITY_GROUP_SOURCE_TYPE_IP = 2;
+}
+
+message SecurityGroupSource {
+  SecurityGroupSourceType type = 1;
+  string id = 2;  // A CIDR when type is IP, or another security group's cloud_security_group_id.
+}
+
+message PortRangeSecurityGroupSource {
+  PortRange port_range = 1;
+  SecurityGroupSource source = 2;
+}
+
+message SecurityGroupData {
+  CloudProvider cloud_provider = 1;
+  string cloud_security_group_id = 2;
+  string protocol = 3;  // tcp, udp, icmp, or any
+  repeated PortRangeSecurityGroupSource port_ranges_with_sources = 4;
+  map<string, string> properties = 5;
+}
+
+message NaclAllowedPortRange {
+  string protocol = 1;
+  PortRange port_range = 2;
+  string source_cidr = 3;  // NACL sources are always IP-based.
+}
+
+// A subnet-level ACL in front of a ComputeInstanceData's security group(s). AllowedPortRanges is
+// the already-resolved set of ports the NACL allows inbound; an instance with an empty list is
+// unreachable through its NACL.
+message NetworkAclData {
+  string cloud_network_acl_id = 1;
+  string name = 2;
+  string subnet = 3;
+  repeated NaclAllowedPortRange allowed_port_ranges = 4;
+}
+
+message DirectInternetExposure {
+  string gating = 1;  // "none" or "authenticated"
+  string auth_mechanism = 2;
+}
+
+// ComputeInstanceData is a reachability vertex: a compute workload, or (subtype DATA_STORE) a
+// managed data store, secured by security groups and/or a subnet NACL. Emitted via
+// collect_network_state, joined into forwarding rules by cloud_instance_id via a NetworkEntity of
+// type NETWORK_ENTITY_TYPE_COMPUTE_INSTANCE.
+message ComputeInstanceData {
+  CloudProvider cloud_provider = 1;
+  string cloud_instance_id = 2;  // ARN or cloud resource ID — required, unique within the integration.
+  repeated SecurityGroupData security_groups = 3;
+  repeated string ips = 4;
+  string subnet = 5;
+  NetworkAclData network_acl = 6;
+  bool has_public_ip = 7;
+  ComputeInstanceSubtype subtype = 8;
+  DirectInternetExposure direct_internet_exposure = 9;
+  map<string, string> properties = 10;
+  string cloud_account_id = 11;  // AWS account id / Azure subscription / GCP project.
+}
+
+// NetworkStateData is the complete current reachability state this integration reports for the
+// tenant, emitted in a single collect_network_state call. It replaces — not merges with — whatever
+// this integration reported last sync: the network processor keeps exactly one current state per
+// (tenant, integration). collect_forwarding_rule / collect_control_association /
+// collect_exposed_entity buffer individually-collected records and flush once at the end of the
+// script, which a script that checkpoints its own collection across Temporal activity retries
+// (e.g. via bigmap) cannot rely on — a retry resuming from a checkpoint would flush only the
+// remainder, dropping already-processed records from the graph. collect_network_state requires the
+// script to assemble the full state itself, so resuming from checkpointed, retry-safe storage is the
+// natural way to build the value passed in.
+message NetworkStateData {
+  repeated ForwardingRuleData forwarding_rules = 1;
+  repeated ExposedEntityData exposed_entities = 2;
+  repeated ControlAssociationData control_associations = 3;
+  repeated ComputeInstanceData compute_instances = 4;
 }
 
 // CustomThreatIntelEntry is one CVE-level threat-intel row emitted via
