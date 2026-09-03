@@ -334,6 +334,14 @@ message NetworkEntity {
   NetworkEntityType type = 2;   // Type of the entity
 }
 
+// Auth gating on a reachability hop. UNSPECIFIED (the default when unset) is treated the same as
+// NONE downstream — the safe direction, since under-reporting hides real exposure.
+enum ReachabilityGating {
+  REACHABILITY_GATING_UNSPECIFIED = 0;
+  REACHABILITY_GATING_NONE = 1;
+  REACHABILITY_GATING_AUTHENTICATED = 2;
+}
+
 // Forwarding rule data for network forwarding/NAT rules
 // These rules describe how traffic is forwarded between network entities.
 message ForwardingRuleData {
@@ -348,6 +356,15 @@ message ForwardingRuleData {
   // enum by the normalizer or network processor. When empty, the rule type
   // defaults to "generic".
   string rule_type = 7;
+  // Auth gating on the hop this rule creates. Stamped on the reachability edge.
+  ReachabilityGating gating = 8;
+  // How credentials are checked (e.g. "oidc", "jwt", "aws_iam"). Only meaningful when gating is
+  // "authenticated".
+  string auth_mechanism = 9;
+  // The port range this rule accepts traffic on. Unset leaves the hop reachable on every port, so
+  // set it wherever the listener port is known — it is what gates a vulnerability's port against
+  // the path.
+  PortRange port_range = 10;
 }
 
 // ExposedEntityData describes a network entity directly reachable from the Internet — the asset
