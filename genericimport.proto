@@ -36,6 +36,10 @@ enum IdentifierType {
   DOMAIN = 25;
   QUALYS_ASSET_ID = 26;
   GCP_RESOURCE_FULL_NAME = 27;
+  // Populate only from an external source: an outside-in scan, a WAF or DNS record, the cloud provider's
+  // API. An agent on the host reports a NAT egress address shared by every host behind it.
+  PUBLIC_IP = 28;
+  OCI_INSTANCE_ID = 29;
 }
 
 enum InstancePropertyType {
@@ -91,21 +95,53 @@ enum FindingType {
 }
 
 enum InstanceType {
+  // The source did not classify this asset. Proto3 zero value, so also the
+  // result of leaving instance_type unset — a legitimate, common outcome: the
+  // asset still imports, and downstream processing may classify it later (e.g.
+  // from the reported operating_system).
   INSTANCE_TYPE_UNKNOWN = 0;
+  // A general-purpose computer: physical or virtual server, workstation, laptop,
+  // hypervisor, VM, or a Kubernetes node (the host running the agent).
   INSTANCE_TYPE_MACHINE = 1;
+  // A container image artifact in a registry — not a running container/pod, nor
+  // the node hosting it. Typically from image/registry scanning.
   INSTANCE_TYPE_CONTAINER_IMAGE = 2;
+  // A serverless compute unit (e.g. AWS Lambda, Azure Function).
   INSTANCE_TYPE_SERVERLESS = 3;
+  // A phone or tablet (iOS, Android, etc.).
   INSTANCE_TYPE_MOBILE_DEVICE = 4;
+  // Network infrastructure: firewall, router, switch, load balancer, or similar
+  // appliance.
   INSTANCE_TYPE_NETWORK_DEVICE = 5;
+  // An operational-technology or IoT device — ICS/SCADA, medical devices,
+  // printers, cameras, and other non-general-purpose connected gear.
   INSTANCE_TYPE_OT_IOT_DEVICE = 6;
+  // A data store: database, object/blob store (e.g. S3 bucket), disk, snapshot,
+  // backup vault, or similar storage service.
   INSTANCE_TYPE_DATA_STORE = 7;
+  // A source-code repository / project, typically the subject of SCA or SAST scans.
   INSTANCE_TYPE_CODE_PROJECT = 8;
+  // A web application or API endpoint, typically the subject of DAST scans. A
+  // scanned web target — not an identity-provider app registration (see
+  // INSTANCE_TYPE_IDP_APPLICATION).
   INSTANCE_TYPE_WEB_APP_API = 9;
+  // A human user identity.
   INSTANCE_TYPE_USER = 10;
+  // A non-human (machine) identity: service account, IAM role, or managed identity.
   INSTANCE_TYPE_SERVICE_ACCOUNT = 11;
+  // A group of users.
   INSTANCE_TYPE_USER_GROUP = 12;
+  // An application / app registration in an identity provider (e.g. an Okta or
+  // Entra ID app) — an identity object, not a scanned web app/API (see
+  // INSTANCE_TYPE_WEB_APP_API).
   INSTANCE_TYPE_IDP_APPLICATION = 13;
+  // Being phased out — do not set this for new or updated integrations; prefer a
+  // more specific type above, or leave instance_type unset. (The platform still
+  // reads it for assets already classified this way.)
   INSTANCE_TYPE_CLOUD_RESOURCE = 14;
+  // A logical CMDB entity (e.g. ServiceNow cmdb_ci_business_app) that groups the assets serving
+  // it. Member assets point at it through their instance properties; it has no findings of its own.
+  INSTANCE_TYPE_BUSINESS_APPLICATION = 15;
 }
 
 // Instance data structures
@@ -138,6 +174,11 @@ message InetEvidence {
   string evidence_string = 3;
   string source = 4;         // Optional: defaults to "third_party" if empty
   string evidence_type = 5;  // Optional: defaults to "third_party_evidence" if empty
+  // Optional: required only when evidence_type is one of the graph-evidence types
+  // (e.g. "wiz_graph_evidence") -- a JSON-encoded internet_facing.GraphEvidence
+  // (e.g. {"type":"wiz"}) naming which vendor graph produced the evidence. The
+  // formatter that renders graph evidence cannot pick its sentence without it.
+  string graph = 6;
 }
 
 message InstanceTagKeyValue {
@@ -186,6 +227,48 @@ message InstanceData {
 
   // Explicit 1:1 links to existing assets reported by other integrations.
   repeated CrossIntegrationMerge cross_integration_merges = 20;
+
+  // Set true when this integration reports a complete runtime picture for the
+  // instance: every running process, with the libraries each one loaded.
+  // Leave it false (the default) and the platform decides for itself — the
+  // instance record is treated as incomplete, and the scan record is inferred
+  // from whether any reported process carries loaded libraries. Only an
+  // integration that knows its scanner enumerates the whole runtime should set
+  // this; claiming completeness the scanner does not have hides real exposure.
+  bool complete_runtime = 21;
+
+  // Supersedes inet_evidence, which can only carry the first of several — a device
+  // exposed by two NAT rules has two. Readers prefer this whenever it is set.
+  repeated InetEvidence inet_evidences = 22;
+
+  // The Linux release behind operating_system, for a source that reports it in
+  // its own fields; a bare "Linux" names no distribution to match packages against.
+  LinuxRelease linux_release = 23;
+
+  // Where the instance sits in each tree the source organises its assets by (e.g. division, then
+  // team). Each level becomes a segment nested under the one before it. Segments are created once
+  // and never updated or deleted.
+  repeated SegmentPath segment_paths = 24;
+}
+
+// One path down a tree, root first. A level's segment matches every tag down to its depth, so put
+// the same pairs in key_value_tags or the segments match nothing.
+message SegmentPath {
+  repeated InstanceTagKeyValue levels = 1;
+  // The group this tree's segments are listed under: "team" lists them under People Segments, where
+  // a level stands for a team that owns its assets. Empty is Business Unit Segments, which the store
+  // holds with no dimension at all; any other value is read as empty. One value for the whole tree —
+  // the store refuses to re-tag a segment that has a parent.
+  string dimension = 2;
+}
+
+// The platform resolves the distribution and version from name and description,
+// so pass the source's text as-is rather than normalizing it.
+message LinuxRelease {
+  string name = 1;           // e.g. "Ubuntu"
+  string description = 2;    // free text naming the release, e.g. "Ubuntu 22.04.4 LTS"
+  string codename = 3;       // e.g. "jammy"
+  string kernel_version = 4; // e.g. "5.15.0-105-generic"
 }
 
 // SBOM Component for standalone software inventory
@@ -193,6 +276,8 @@ message SBOMComponent {
   Component component = 1;
   repeated string file_paths = 2;
   map<string, string> dynamic_properties = 3; // Custom key-value metadata from the integration
+  MntInfo mnt_info = 4; // The container image the component ships in
+  repeated string additional_cpe23s = 5; // Other CPEs the component's CVEs may be filed under
 }
 
 // Vulnerability data structures
@@ -255,6 +340,16 @@ message Vulnerability {
   repeated Component components = 20;
   ScanType scan_type = 21; // UVM scan type
   FindingType finding_type = 22; // UVM finding type
+  double vpr_score = 23; // Vulnerability Priority Rating
+  MntInfo mnt_info = 24; // The container image the components ship in
+  // Scanner-specific metadata with several values per key, e.g. every compliance framework a rule
+  // belongs to. Each value is stored and filtered on its own, which a joined string in
+  // dynamic_properties cannot be. A key set in both maps keeps the values of both.
+  map<string, DynamicPropertyValues> dynamic_property_values = 25;
+}
+
+message DynamicPropertyValues {
+  repeated string values = 1;
 }
 
 // Control type enum - matches db interfaces ControlType
@@ -326,6 +421,12 @@ enum NetworkEntityType {
   NETWORK_ENTITY_TYPE_DOMAIN = 3;
   // Entity is the cloud_instance_id of a ComputeInstanceData in the same NetworkStateData.
   NETWORK_ENTITY_TYPE_COMPUTE_INSTANCE = 4;
+  // Entity is the service_id of a ServiceData in the same NetworkStateData. Only valid in
+  // collect_network_state.
+  NETWORK_ENTITY_TYPE_SERVICE = 5;
+  // Entity is the rule_id of a LoadBalancerData in the same NetworkStateData (e.g. an API gateway
+  // route to a load balancer). Only valid in collect_network_state.
+  NETWORK_ENTITY_TYPE_FORWARDING_RULE = 6;
 }
 
 // Network entity represents a source or destination in a forwarding rule
@@ -346,7 +447,9 @@ enum ReachabilityGating {
 // These rules describe how traffic is forwarded between network entities.
 message ForwardingRuleData {
   string rule_id = 1;                     // Unique rule identifier within this integration (required)
-  NetworkEntity source = 2;               // Source network entity (required)
+  // Source network entity. Required unless is_internet_facing is set — an internet-facing rule is
+  // reached from the Internet itself, which has no entity to name.
+  NetworkEntity source = 2;
   NetworkEntity destination = 3;          // Destination network entity (required)
   bool is_bidirectional = 4;              // Whether the rule applies in both directions
   map<string, string> properties = 5;     // Optional custom properties for the rule
@@ -365,6 +468,24 @@ message ForwardingRuleData {
   // set it wherever the listener port is known — it is what gates a vulnerability's port against
   // the path.
   PortRange port_range = 10;
+  // Whether the Internet reaches this rule directly — a public load balancer or API gateway, which
+  // fronts its backends rather than sitting behind something that does. It links the rule straight to
+  // the Internet, so set it only for a rule that really is the first hop. Leave source unset on such a
+  // rule: 0.0.0.0/0 is not a way to say "the Internet" here, it is a CIDR the graph discards as too
+  // broad, and the rule is dropped with it.
+  bool is_internet_facing = 11;
+  // The rule's own filter: the security groups traffic crosses to reach it, the same shape a
+  // ComputeInstanceData carries. Set these on a front door and it filters like the cloud's own load
+  // balancer does — the Internet link lands on the groups rather than the rule, and a backend whose
+  // group admits only this front door's group resolves that source instead of failing closed. Leave
+  // them unset and the rule filters nothing of its own, which over-reports its exposure by exactly
+  // this layer.
+  repeated SecurityGroupData security_groups = 12;
+  // The destination port the rule translates traffic to, e.g. a load balancer's 443 listener forwarding
+  // to a pool member on 8080. 0 when the rule does not translate: traffic leaves on the port it arrived
+  // on. Without it a finding on the destination's own port is judged unreachable through a rule whose
+  // port_range does not include that port.
+  int32 target_port = 13;
 }
 
 // ExposedEntityData describes a network entity directly reachable from the Internet — the asset
@@ -402,6 +523,11 @@ message ControlAssociationData {
   // those names resolve to. Use this for WAFs that know their protected hostnames but not the backend
   // addresses behind them; it is complementary to forwarding_rule_ids, not a replacement.
   repeated string domains = 6;
+  // Cloud security group ids this control is — e.g. sg-0abc for an AWS security group reported as a
+  // firewall control. Matched against the cloud_security_group_id of the SecurityGroupData the same
+  // integration ships in its network state, so the control reaches every workload and front door that
+  // group is attached to.
+  repeated string security_group_ids = 7;
 }
 
 // CloudProvider of a compute instance or security group (mirrors forwardingrules.CloudProvider).
@@ -421,6 +547,9 @@ enum ComputeInstanceSubtype {
   COMPUTE_INSTANCE_SUBTYPE_VM = 1;
   COMPUTE_INSTANCE_SUBTYPE_SERVERLESS = 2;
   COMPUTE_INSTANCE_SUBTYPE_DATA_STORE = 3;
+  // A container image a forwarding rule routes to. It is not a network endpoint and holds no
+  // security groups, so the rule reaches it directly rather than through a filter in front of it.
+  COMPUTE_INSTANCE_SUBTYPE_CONTAINER_IMAGE = 4;
 }
 
 message PortRange {
@@ -466,6 +595,10 @@ message NetworkAclData {
   string name = 2;
   string subnet = 3;
   repeated NaclAllowedPortRange allowed_port_ranges = 4;
+  // The ACL also filters traffic between resources inside its own subnet, as an Azure subnet NSG does.
+  // Unset, it is an AWS network ACL, which only filters traffic crossing the subnet boundary: a load
+  // balancer reaches a destination in its own subnet without crossing it.
+  bool applies_within_subnet = 5;
 }
 
 message DirectInternetExposure {
@@ -491,6 +624,105 @@ message ComputeInstanceData {
   string cloud_account_id = 11;  // AWS account id / Azure subscription / GCP project.
 }
 
+// One listener of a load balancer: the port it accepts on and the backends it forwards that port to.
+message LoadBalancerListenerData {
+  PortRange port_range = 1;
+  int32 target_port = 2;  // The backend port the listener translates to; 0 when it does not translate.
+  ReachabilityGating gating = 3;
+  string auth_mechanism = 4;  // e.g. "cognito", "oidc". Only meaningful when gating is AUTHENTICATED.
+  // COMPUTE_INSTANCE, SERVICE, IP, RANGE, DOMAIN, or FORWARDING_RULE naming another LoadBalancerData
+  // rule_id (e.g. an Azure Front Door in front of an Application Gateway).
+  repeated NetworkEntity destinations = 5;
+}
+
+// LoadBalancerData is a cloud load balancer: one graph vertex, filtered by its own security groups and
+// subnet ACLs, forwarding each listener's port to that listener's destinations. The forwarding rule
+// type is rule_type, or derived from cloud_provider when it is unset (e.g. aws_load_balancer), the same
+// as the cloud's own integration.
+message LoadBalancerData {
+  string rule_id = 1;  // Required, unique within the integration. Stable across syncs.
+  CloudProvider cloud_provider = 2;  // Required.
+  bool is_internet_facing = 3;
+  repeated SecurityGroupData security_groups = 4;
+  // The subnets the load balancer sits in. A destination instance in one of them is reached without
+  // crossing its subnet ACL.
+  repeated string subnets = 5;
+  repeated NetworkAclData network_acls = 6;
+  repeated LoadBalancerListenerData listeners = 7;
+  map<string, string> properties = 8;
+  // Optional free-form forwarding rule type (e.g. "azure_front_door"), stored as-is like
+  // ForwardingRuleData.rule_type. Unset takes the cloud's default type.
+  string rule_type = 9;
+  // The source identities a backend sees on this load balancer's traffic, beyond its security groups:
+  // a proxy that replaces the client's address presents its own, e.g. Azure's "VirtualNetwork" or
+  // "AzureFrontDoor.Backend" service tags. A backend rule whose source names one of them admits this
+  // load balancer's traffic. Leave it empty for a load balancer that keeps the client's address.
+  repeated string source_identities = 10;
+  // The hostnames and public addresses the load balancer is entered through (DOMAIN or IP). Each leads
+  // into the load balancer itself, past any filter of its own, so set it only on a load balancer that has
+  // none (an Azure one). Expose them as exposed_entities to reach the load balancer from the Internet; a
+  // load balancer another one forwards to by one of these names is reached through that one.
+  repeated NetworkEntity frontends = 11;
+  // Whether the Internet reaches the load balancer itself, past any filter of its own, as on
+  // ComputeInstanceData. Set it only on a load balancer that really has no filter to cross (Azure's L4
+  // load balancer, Front Door); is_internet_facing instead anchors the Internet at its filters.
+  DirectInternetExposure direct_internet_exposure = 12;
+}
+
+message ApiGatewayRouteData {
+  string route_key = 1;  // e.g. "GET /orders"
+  ReachabilityGating gating = 2;
+  string auth_mechanism = 3;  // e.g. "jwt", "aws_iam", "custom". Only meaningful when gating is AUTHENTICATED.
+  PortRange port_range = 4;
+  int32 target_port = 5;
+  // COMPUTE_INSTANCE (e.g. a serverless function) or FORWARDING_RULE (a LoadBalancerData rule_id).
+  NetworkEntity destination = 6;
+}
+
+// ApiGatewayData is a cloud API gateway: one graph vertex with no security group of its own, forwarding
+// each route to its backend. The forwarding rule type is rule_type, or derived from cloud_provider when it
+// is unset (e.g. aws_api_gateway).
+message ApiGatewayData {
+  string rule_id = 1;  // Required, unique within the integration. Stable across syncs.
+  CloudProvider cloud_provider = 2;  // Required.
+  bool is_internet_facing = 3;
+  repeated ApiGatewayRouteData routes = 4;
+  map<string, string> properties = 5;
+  // As on LoadBalancerData: an optional free-form forwarding rule type (e.g. "azure_api_management").
+  string rule_type = 6;
+  // As on LoadBalancerData: the source identities a backend sees on this gateway's traffic, e.g.
+  // "ApiManagement" and "VirtualNetwork" for an Azure API Management instance deployed in a VNet.
+  repeated string source_identities = 7;
+  // As on LoadBalancerData: the hostnames and public addresses the gateway is entered through.
+  repeated NetworkEntity frontends = 8;
+}
+
+// A container a service exposes, and the port it exposes it on.
+message ExposedContainerData {
+  string container_name = 1;  // Required, unique within the service.
+  string image = 2;  // The image reference, as written in the workload spec.
+  // The value the container image asset carries as an instance identifier (e.g. its digest or
+  // repository); it is what joins the container to that asset.
+  string image_key = 3;
+  int32 container_port = 4;  // 0 exposes every port.
+}
+
+// ServiceData is a service (e.g. a Kubernetes or ECS service) as a reachability vertex: secured by its
+// security groups, reached by a load balancer or a route naming it as a SERVICE destination, and
+// exposing its containers.
+message ServiceData {
+  string service_id = 1;  // Required, unique within the integration.
+  string name = 2;
+  string cluster = 3;
+  // Scopes the exposed containers' identity; defaults to service_id.
+  string task_definition_id = 4;
+  string network_mode = 5;
+  string launch_type = 6;  // e.g. "eks", "fargate".
+  bool assign_public_ip = 7;
+  repeated SecurityGroupData security_groups = 8;
+  repeated ExposedContainerData exposed_containers = 9;
+}
+
 // NetworkStateData is the complete current reachability state this integration reports for the
 // tenant, emitted in a single collect_network_state call. It replaces — not merges with — whatever
 // this integration reported last sync: the network processor keeps exactly one current state per
@@ -506,6 +738,9 @@ message NetworkStateData {
   repeated ExposedEntityData exposed_entities = 2;
   repeated ControlAssociationData control_associations = 3;
   repeated ComputeInstanceData compute_instances = 4;
+  repeated LoadBalancerData load_balancers = 5;
+  repeated ApiGatewayData api_gateways = 6;
+  repeated ServiceData services = 7;
 }
 
 // CustomThreatIntelEntry is one CVE-level threat-intel row emitted via
