@@ -1,0 +1,757 @@
+syntax = "proto3";
+
+package remediation_db.ticket_schema;
+
+option go_package = "zafran.io/remediation/db/interfaces/proto/gen/schema/ticket_schema";
+
+import "google/protobuf/timestamp.proto";
+import "buf/validate/validate.proto";
+import "schema/common/pagination.proto";
+
+message GetPublishContextRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+
+    string connection_id = 2 [(buf.validate.field).required = true, (buf.validate.field).string.uuid = true];
+
+    // A draft connection resolves a context only for the test that is validating it.
+    // Publishing must not, which is why refusing it is the default.
+    optional bool allow_draft = 4;
+}
+
+// ticket_creation_policy project.
+message Project {
+    string external_id = 1;
+    string external_key = 2;
+    string external_display_name = 3;
+    // The id the pickers take: TicketProject.internal_id.
+    uint64 internal_id = 4;
+}
+
+message IssueType {
+    string external_id = 1;
+    string external_display_name = 2;
+    optional string external_key = 3; // no collector populates this yet
+    // The id the pickers take: TicketIssueType.internal_id.
+    string internal_id = 4;
+}
+
+// Jira maps "priority" alone, ServiceNow "urgency" and "impact" together.
+message ExternalPriorityValues {
+    map<string, string> external_value_by_zafran_field_id = 1;
+}
+
+message GetPublishContextResponse {
+    string connection_id = 10;
+    uint64 integration_id = 11;
+    string integration_type = 12;
+
+    // Set for every integration that has one, and a connection that cannot resolve it fails. A
+    // webhook has no destination of its own, so it gets neither this nor the issue type.
+    Project project = 2;
+
+    // Resolved by the connection's external_issue_type_id. Unset for a webhook, as above.
+    IssueType issue_type = 3;
+
+    // The external system's own status id per entity (work item) status. Unmapped is absent.
+    map<string, string> status_external_ids_by_entity_status_id = 7;
+
+    // Per entity (work item) priority, off the connection's priority_mapping column.
+    map<string, ExternalPriorityValues> priority_values_by_entity_priority_id = 9;
+
+    optional string external_parent_ticket_key = 6;
+
+    // ServiceNow only -- Jira's sole custom field is parent, which has its own field above.
+    map<string, string> custom_create_fields = 8;
+}
+
+// An external field the connection sets that a zafran field is already mapped to.
+// Both write it, and merge order decides which value survives.
+message AlreadyMappedCustomField {
+    string external_id = 1;
+    string zafran_id = 2;
+}
+
+message ValidateConnectionRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+
+    string connection_id = 2 [(buf.validate.field).required = true, (buf.validate.field).string.uuid = true];
+}
+
+message ValidateConnectionResponse {
+    bool is_valid = 1;
+    repeated AlreadyMappedCustomField custom_create_field_conflicts = 2;
+}
+
+enum TicketIntegrationCapability {
+    TICKET_INTEGRATION_CAPABILITY_UNSPECIFIED = 0;
+    TICKET_INTEGRATION_CAPABILITY_TEAM_ASSIGNMENT = 1;
+    TICKET_INTEGRATION_CAPABILITY_ATTACHMENTS = 2;
+    // The connection test can delete the ticket it created.
+    TICKET_INTEGRATION_CAPABILITY_TEST_TICKET_DELETION = 3;
+    // Assignable users are restricted to members of the assigned team.
+    TICKET_INTEGRATION_CAPABILITY_USER_TEAM_MEMBERSHIP_ENFORCED = 4;
+    reserved 5;
+    reserved "TICKET_INTEGRATION_CAPABILITY_AUTO_CONFIGURE_ENVIRONMENT";
+    TICKET_INTEGRATION_CAPABILITY_PARENT = 6;
+    TICKET_INTEGRATION_CAPABILITY_CUSTOM_CREATE_FIELDS = 7;
+}
+
+message TicketIntegration {
+    uint64 internal_id = 1;
+    string display_name = 2;
+    string integration_type = 3;
+    repeated TicketIntegrationCapability capabilities = 5;
+}
+
+message ListTicketIntegrationsRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    common.PageRequest page = 3;
+}
+
+message ListTicketIntegrationsResponse {
+    repeated TicketIntegration integrations = 1;
+}
+
+// A project by either identifier. The external arm exists because callers seeded from the legacy
+// Targets.ListTicketTypes hold external ids; both arms are served by a unique index.
+message TicketProjectRef {
+    option (buf.validate.message).oneof = { fields: ["internal_id", "external_id"], required: true };
+    optional uint64 internal_id = 1 [(buf.validate.field).uint64.gt = 0];
+    optional string external_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+}
+
+message TicketProject {
+    uint64 internal_id = 1;
+    uint64 integration_id = 2;
+    string external_id = 3;
+    string external_key = 4;
+    string external_display_name = 5;
+}
+
+message ListTicketProjectsRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    // Case-insensitive substring over external_display_name or external_key.
+    optional string search = 3 [(buf.validate.field).string.max_len = 255];
+    reserved 4;
+    reserved "page";
+    // 0 selects the server default.
+    uint32 page_size = 5 [(buf.validate.field).uint32.lte = 500];
+    // A next_cursor from a previous response, valid only for the same tenant, integration and
+    // search: it names a row in that ordering, so changing the filter resumes somewhere arbitrary.
+    optional string cursor = 6 [(buf.validate.field).string = {min_len: 1, max_len: 2048}];
+}
+
+message ListTicketProjectsResponse {
+    repeated TicketProject projects = 1;
+    // Absent means this was the last page.
+    optional string next_cursor = 2;
+}
+
+// A project as the external system defines it. It is not TicketProject: internal_id is assigned by
+// the write.
+// Starlark scripts also build this message by field name (genericimport.TicketProject, via
+// collect_ticket_project), and it is stored as JSON: a field name is API, never rename one.
+message ProjectInput {
+    string external_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional string external_key = 2 [(buf.validate.field).string.max_len = 255];
+    string external_display_name = 3 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+}
+
+// The integration type is not taken from the caller: it is read off the integration, so a request
+// cannot write projects under a type that contradicts the integration they belong to.
+message AddProjectsRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    // 5000 rows of 8 columns stays under Postgres's 65,535-parameter ceiling in one statement.
+    repeated ProjectInput projects = 3 [(buf.validate.field).repeated = {
+        max_items: 5000,
+        items: {required: true}
+    }];
+}
+
+message AddProjectsResponse {}
+
+message TicketIssueType {
+    string internal_id = 1;
+    string external_id = 2;
+    optional string external_key = 3;
+    string external_display_name = 4;
+    optional string description = 5;
+}
+
+// A project's issue types number in the tens, so the list is served whole and unsearched, as
+// ListTicketStatuses and ListTicketPriorities are.
+message ListTicketIssueTypesRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    TicketProjectRef project = 3 [(buf.validate.field).required = true];
+}
+
+message ListTicketIssueTypesResponse {
+    repeated TicketIssueType issue_types = 1;
+}
+
+// A connection, projected from its own columns. Every field is served as stored -- the writer
+// decides what a given integration populates, so nothing here branches on integration type.
+message TicketConnection {
+    string internal_id = 1;
+    optional string display_name = 2;
+    string integration_type = 3;
+    // 0 on rows written before integrations were mandatory.
+    uint64 integration_id = 4;
+    bool is_deprecated = 5;
+    bool is_draft = 6;
+
+    google.protobuf.Timestamp created_at = 7;
+    google.protobuf.Timestamp updated_at = 8;
+    // The display name, or the email when the IdP supplied none. Unset on rows written before this.
+    optional string created_by = 9;
+    optional string updated_by = 10;
+
+    optional string external_parent_ticket_key = 11;
+
+    // Resolved from the connection's external ids; absent when unset or no longer synced.
+    Project project = 12;
+    IssueType issue_type = 13;
+
+    repeated TicketIntegrationCapability capabilities = 14;
+    optional uint32 policy_usage_count = 15;
+}
+
+message ListTicketConnectionsRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    // Absent leaves the flag unfiltered.
+    optional bool is_deprecated = 2;
+    optional bool is_draft = 3;
+    common.PageRequest page = 4;
+    optional uint64 integration_id = 5 [(buf.validate.field).uint64.gt = 0];
+    // Exact match; an unknown type is an empty page, not an error.
+    optional string integration_type = 6 [(buf.validate.field).string.min_len = 1];
+    bool include_policy_usage = 7;
+}
+
+message ListTicketConnectionsResponse {
+    repeated TicketConnection connections = 1;
+}
+
+// An issue type by either identifier, mirroring TicketProjectRef. Both arms are in use: the
+// pickers fed by the legacy ticket_types route hold external ids, the /issue-types endpoint
+// serves internal ids.
+message TicketIssueTypeRef {
+    option (buf.validate.message).oneof = { fields: ["internal_id", "external_id"], required: true };
+    optional string internal_id = 1 [(buf.validate.field).string.uuid = true];
+    optional string external_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+}
+
+// external_id is NOT unique within a tenant and integration: an integration that scopes by issue type
+// sets ExternalStatuses.scope_id to the issue type's external id, so one logical status yields one
+// row per issue type. Only internal_id is a stable key -- never key off external_id.
+message TicketStatus {
+    string internal_id = 1;
+    string external_id = 2;
+    string external_display_name = 3;
+}
+
+message ListTicketStatusesRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    TicketProjectRef project = 3 [(buf.validate.field).required = true];
+    TicketIssueTypeRef issue_type = 4 [(buf.validate.field).required = true];
+}
+
+message ListTicketStatusesResponse {
+    repeated TicketStatus statuses = 1;
+}
+
+enum StatusCategory {
+    STATUS_CATEGORY_UNSPECIFIED = 0;
+    STATUS_CATEGORY_TO_DO = 1;
+    STATUS_CATEGORY_DONE = 2;
+}
+
+message ConnectionStatusToSuggest {
+    string entity_status_id = 1 [(buf.validate.field).string.uuid = true];
+    string display_name = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional StatusCategory category = 3 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
+}
+
+message GetDefaultConnectionStatusMappingRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    TicketProjectRef project = 3 [(buf.validate.field).required = true];
+    TicketIssueTypeRef issue_type = 4 [(buf.validate.field).required = true];
+    // The order decides which Zafran status an external category falls back to inbound.
+    repeated ConnectionStatusToSuggest statuses = 5 [(buf.validate.field).repeated = {min_items: 1, max_items: 100}];
+}
+
+// A mapping is unset when nothing matched.
+message GetDefaultConnectionStatusMappingResponse {
+    StatusMapping status_mapping = 1;
+    InboundStatusMapping inbound_status_mapping = 2;
+}
+
+// An issue type as the external system defines it. It is not TicketIssueType: internal_id is
+// assigned by the write.
+// Starlark scripts also build this message by field name (genericimport.TicketProject, via
+// collect_ticket_project), and it is stored as JSON: a field name is API, never rename one.
+message IssueTypeInput {
+    string external_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    string external_display_name = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional string external_key = 3 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional string description = 4 [(buf.validate.field).string.max_len = 1000];
+    google.protobuf.Timestamp last_seen_in_sync = 5 [(buf.validate.field).required = true];
+}
+
+// The integration type is not taken from the caller: it is read off the project, so a request
+// cannot write issue types under a type that contradicts the project they hang off.
+message AddIssueTypesRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    string project_external_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    // 5000 rows of 12 columns stays under Postgres's 65,535-parameter ceiling in one statement.
+    repeated IssueTypeInput issue_types = 4 [(buf.validate.field).repeated = {
+        max_items: 5000,
+        items: {required: true}
+    }];
+}
+
+message AddIssueTypesResponse {}
+
+// A status as the external system defines it. It is not TicketStatus: internal_id is assigned by
+// the write, and the issue types a status applies to are named here rather than fixed by the
+// request, because within one project a Jira status applies to some issue types and not others.
+// Starlark scripts also build this message by field name (genericimport.TicketProject, via
+// collect_ticket_project), and it is stored as JSON: a field name is API, never rename one.
+message ExternalStatusInput {
+    string external_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    string external_display_name = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional string description = 3 [(buf.validate.field).string.max_len = 1000];
+    optional string status_category = 4 [(buf.validate.field).string.max_len = 100];
+    google.protobuf.Timestamp last_seen_in_sync = 5 [(buf.validate.field).required = true];
+    repeated string issue_type_external_ids = 6 [(buf.validate.field).repeated = {
+        min_items: 1,
+        items: {string: {min_len: 1, max_len: 255}}
+    }];
+    optional StatusCategory zafran_status_category = 7 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
+}
+
+// The integration type is not taken from the caller: it is read off the project, so the scoping
+// decision it drives cannot contradict the row the statuses are being attached to.
+message AddTicketStatusesRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    string project_external_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    // Bounded because the write expands one input into one row per issue type it names, and the
+    // rows and their links are chunked against Postgres's parameter ceiling from there.
+    repeated ExternalStatusInput statuses = 4 [(buf.validate.field).repeated = {
+        max_items: 5000,
+        items: {required: true}
+    }];
+}
+
+message AddTicketStatusesResponse {}
+
+message TicketPriority {
+    string internal_id = 1;
+    string external_id = 2;
+    string external_display_name = 3;
+}
+
+// One priority field a tenant can map, e.g. ServiceNow's urgency.
+message PriorityField {
+    string display_name = 1;
+    repeated TicketPriority values = 2;
+}
+
+// One usable set of fields. ServiceNow takes urgency and impact together, or priority alone.
+message FieldCombination {
+    repeated string zafran_ids = 1 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message ListTicketPrioritiesRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    TicketProjectRef project = 3 [(buf.validate.field).required = true];
+    TicketIssueTypeRef issue_type = 4 [(buf.validate.field).required = true];
+}
+
+message ListTicketPrioritiesResponse {
+    // Keyed by zafran field id. A field the integration declares but the tenant has no values for
+    // is absent, so the caller never renders an empty picker.
+    map<string, PriorityField> fields = 1;
+    // Only combinations whose every field is present above -- advertising a pair the tenant cannot
+    // complete would offer a mapping that can never be saved.
+    repeated FieldCombination combinations = 2;
+}
+
+message ConnectionPriorityToSuggest {
+    string entity_priority_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    string display_name = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+}
+
+message GetDefaultConnectionPriorityMappingRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    TicketProjectRef project = 3 [(buf.validate.field).required = true];
+    TicketIssueTypeRef issue_type = 4 [(buf.validate.field).required = true];
+    // Most severe first.
+    repeated ConnectionPriorityToSuggest priorities = 5 [(buf.validate.field).repeated = {
+        min_items: 1,
+        max_items: 100,
+        items: {required: true}
+    }];
+    repeated string priority_field_ids = 6 [(buf.validate.field).repeated = {
+        min_items: 1,
+        max_items: 10,
+        unique: true,
+        items: {string: {min_len: 1, max_len: 255}}
+    }];
+}
+
+message GetDefaultConnectionPriorityMappingResponse {
+    PriorityMapping priority_mapping = 1;
+}
+
+// A priority list is collected per field, so the issue type it applies to is on the request rather
+// than repeated on every value.
+// Starlark scripts also build this message by field name (genericimport.TicketProject, via
+// collect_ticket_project), and it is stored as JSON: a field name is API, never rename one.
+message ExternalPriorityInput {
+    string external_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    string external_display_name = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional string description = 3 [(buf.validate.field).string.max_len = 1000];
+    google.protobuf.Timestamp last_seen_in_sync = 4 [(buf.validate.field).required = true];
+    optional uint32 rank = 5 [(buf.validate.field).uint32.gt = 0];
+}
+
+// The integration type is read off the project, as in AddTicketStatuses.
+message AddTicketPrioritiesRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    string project_external_id = 3 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    // Absent links the values to every issue type of the project. A scoped integration must set it,
+    // which only the handler can enforce -- the proto does not know the integration type.
+    optional string issue_type_external_id = 4 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    // The zafran field id the values belong to, as PriorityField keys them. Absent writes the default.
+    optional string priority_type = 5 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    // Bounded so the rows and their links stay chunkable against Postgres's parameter ceiling.
+    repeated ExternalPriorityInput priorities = 6 [(buf.validate.field).repeated = {
+        max_items: 5000,
+        items: {required: true}
+    }];
+}
+
+message AddTicketPrioritiesResponse {}
+
+message Clear {}
+
+message ClearableString {
+    option (buf.validate.message).oneof = {fields: ["clear", "value"], required: true};
+    optional Clear clear = 1;
+    optional string value = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+// Today only ServiceNow populates it.
+message CustomCreateFields {
+    map<string, string> external_field_name_to_value = 1 [
+        (buf.validate.field).map.min_pairs = 1,
+        (buf.validate.field).map.keys.string.min_len = 1
+    ];
+}
+
+// Keyed by the entity's (work item's) zafran status id; values are TicketStatus.internal_id. Stored
+// as the external system's own status id so it survives resyncs.
+message StatusMapping {
+    map<string, string> entity_status_id_to_status_internal_id = 1 [
+        (buf.validate.field).map.min_pairs = 1,
+        (buf.validate.field).map.keys.string.min_len = 1,
+        (buf.validate.field).map.values.string.uuid = true
+    ];
+}
+
+// Inbound: when the ticket is moved to an external status, the entity (work item) takes the mapped
+// status. Keyed by TicketStatus.internal_id, values are entity status ids. Stored as the external
+// system's own status id so it survives resyncs. An external status with no entry changes nothing.
+message InboundStatusMapping {
+    map<string, string> status_internal_id_to_entity_status_id = 1 [
+        (buf.validate.field).map.min_pairs = 1,
+        (buf.validate.field).map.keys.string.uuid = true,
+        (buf.validate.field).map.values.string.uuid = true
+    ];
+}
+
+// Keyed by zafran field id -- the keys of ListTicketPrioritiesResponse.fields: "priority", or
+// ServiceNow's "urgency" / "impact". Every entry of a mapping must use the same field set, and it
+// must be one of the combinations (checked by the handler).
+message PriorityValues {
+    map<string, string> zafran_field_id_to_priority_internal_id = 1 [
+        (buf.validate.field).map.min_pairs = 1,
+        (buf.validate.field).map.keys.string.min_len = 1,
+        (buf.validate.field).map.values.string.uuid = true
+    ];
+}
+
+// Keyed by the entity's (work item's) zafran priority id.
+message PriorityMapping {
+    map<string, PriorityValues> entity_priority_id_to_priority_values = 1 [
+        (buf.validate.field).map.min_pairs = 1,
+        (buf.validate.field).map.keys.string.min_len = 1
+    ];
+}
+
+message GetTicketConnectionRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    string internal_id = 2 [(buf.validate.field).string.uuid = true];
+}
+
+message TicketPriorityValues {
+    map<string, TicketPriority> zafran_field_id_to_priority = 1;
+}
+
+// TicketConnection's fields, same numbers, plus the editable detail.
+message GetTicketConnectionResponse {
+    string internal_id = 1;
+    optional string display_name = 2;
+    string integration_type = 3;
+    uint64 integration_id = 4;
+    bool is_deprecated = 5;
+    bool is_draft = 6;
+    google.protobuf.Timestamp created_at = 7;
+    google.protobuf.Timestamp updated_at = 8;
+    optional string created_by = 9;
+    optional string updated_by = 10;
+    optional string external_parent_ticket_key = 11;
+    Project project = 12;
+    IssueType issue_type = 13;
+    repeated TicketIntegrationCapability capabilities = 14;
+
+    optional string description = 15;
+    map<string, string> custom_create_field_name_to_value = 16;
+
+    map<string, TicketStatus> entity_status_id_to_external_status = 17;
+    map<string, TicketPriorityValues> entity_priority_id_to_priorities = 18;
+
+    // Stored entries whose external id no longer resolves to a synced row; left out of the maps
+    // above. A priority entry is unresolved if any of its fields is.
+    repeated string unresolved_entity_status_ids = 19;
+    repeated string unresolved_entity_priority_ids = 20;
+
+    // Resolved back to TicketStatus.internal_id keys, as the create/update requests take it.
+    InboundStatusMapping inbound_status_mapping = 21;
+    // Stored external status ids (the external system's own) whose row no longer resolves; left out
+    // of the mapping above.
+    repeated string unresolved_inbound_external_status_ids = 22;
+}
+
+message CreateTicketConnectionRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    // integration_type is resolved from the integration.
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    uint64 project_internal_id = 3 [(buf.validate.field).uint64.gt = 0];
+    string issue_type_internal_id = 4 [(buf.validate.field).string.uuid = true];
+
+    string display_name = 5 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional string description = 6 [(buf.validate.field).string = {min_len: 1, max_len: 1000}];
+
+    optional string external_parent_ticket_key = 7 [(buf.validate.field).string = {
+        max_len: 255, pattern: "^[A-Za-z][A-Za-z0-9_]*-[0-9]+$"
+    }];
+
+    CustomCreateFields custom_create_fields = 8;
+    StatusMapping status_mapping = 9;
+    PriorityMapping priority_mapping = 10;
+
+    // Saved by the connection test so a test ticket has something to hang on.
+    optional bool is_draft = 11;
+
+    // The acting user's email.
+    string created_by = 12 [(buf.validate.field).string.min_len = 1];
+
+    InboundStatusMapping inbound_status_mapping = 13;
+}
+
+message CreateTicketConnectionResponse {
+    TicketConnection connection = 1;
+}
+
+message CustomCreateFieldsUpdate {
+    option (buf.validate.message).oneof = {fields: ["clear", "value"], required: true};
+    optional Clear clear = 1;
+    optional CustomCreateFields value = 2;
+}
+
+message StatusMappingUpdate {
+    option (buf.validate.message).oneof = {fields: ["clear", "value"], required: true};
+    optional Clear clear = 1;
+    optional StatusMapping value = 2;
+}
+
+message PriorityMappingUpdate {
+    option (buf.validate.message).oneof = {fields: ["clear", "value"], required: true};
+    optional Clear clear = 1;
+    optional PriorityMapping value = 2;
+}
+
+message InboundStatusMappingUpdate {
+    option (buf.validate.message).oneof = {fields: ["clear", "value"], required: true};
+    optional Clear clear = 1;
+    optional InboundStatusMapping value = 2;
+}
+
+// Partial: an absent field is left as stored. The destination (integration, project, issue type)
+// is immutable.
+message UpdateTicketConnectionRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    string internal_id = 2 [(buf.validate.field).string.uuid = true];
+
+    optional string display_name = 3 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    optional ClearableString description = 4 [(buf.validate.field).cel = {
+        id: "description.max_len"
+        message: "description must be at most 1000 characters"
+        expression: "!has(this.value) || size(this.value) <= 1000"
+    }];
+    optional ClearableString external_parent_ticket_key = 5 [(buf.validate.field).cel = {
+        id: "external_parent_ticket_key.format"
+        message: "external_parent_ticket_key must be a ticket key of at most 255 characters"
+        expression: "!has(this.value) || (size(this.value) <= 255 && this.value.matches('^[A-Za-z][A-Za-z0-9_]*-[0-9]+$'))"
+    }];
+
+    optional CustomCreateFieldsUpdate custom_create_fields = 6;
+    optional StatusMappingUpdate status_mapping = 7;
+    optional PriorityMappingUpdate priority_mapping = 8;
+
+    // Clear-only: false adopts the draft; true would hide a live connection.
+    optional bool is_draft = 9 [(buf.validate.field).bool.const = false];
+
+    // The acting user's email.
+    string updated_by = 10 [(buf.validate.field).string.min_len = 1];
+
+    optional InboundStatusMappingUpdate inbound_status_mapping = 11;
+}
+
+message UpdateTicketConnectionResponse {
+    TicketConnection connection = 1;
+}
+
+message DeprecateTicketConnectionRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    string internal_id = 2 [(buf.validate.field).string.uuid = true];
+    // The acting user.
+    string updated_by = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+enum ConnectionDependencyKind {
+    CONNECTION_DEPENDENCY_KIND_UNSPECIFIED = 0;
+    CONNECTION_DEPENDENCY_KIND_WORK_ITEM_POLICY = 1;
+}
+
+message ConnectionDependent {
+    string internal_id = 1;
+    string display_name = 2;
+}
+
+// dependents is a sample of at most 5; total is the full count.
+message ConnectionDependency {
+    ConnectionDependencyKind kind = 1;
+    repeated ConnectionDependent dependents = 2;
+    uint32 total = 3;
+}
+
+// Empty when the connection was deprecated; otherwise nothing was written.
+message DeprecateTicketConnectionResponse {
+    repeated ConnectionDependency dependencies = 1;
+}
+
+// A zafran field or value and the external id it publishes as, per integration.
+message TicketField {
+    uint64 internal_id = 1;
+    string zafran_id = 2;
+    string external_id = 3;
+    string display_name = 4;
+}
+
+message ListTicketFieldsRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+}
+
+message ListTicketFieldsResponse {
+    uint64 tenant_id = 1;
+    uint64 integration_id = 2;
+    repeated TicketField fields = 3;
+}
+
+message TicketFieldInput {
+    string zafran_id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    string external_id = 2 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+    string display_name = 3 [(buf.validate.field).string = {min_len: 1, max_len: 255}];
+}
+
+message AddTicketFieldsRequest {
+    uint64 tenant_id = 1 [(buf.validate.field).uint64.gt = 0];
+    uint64 integration_id = 2 [(buf.validate.field).uint64.gt = 0];
+    repeated TicketFieldInput fields = 3 [
+        (buf.validate.field).repeated = {min_items: 1, max_items: 1000, items: {required: true}},
+        (buf.validate.field).cel = {
+            id: "fields.zafran_id.unique"
+            message: "fields must not repeat a zafran_id"
+            expression: "this.map(f, f.zafran_id).unique()"
+        },
+        (buf.validate.field).cel = {
+            id: "fields.external_id.unique"
+            message: "fields must not repeat an external_id"
+            expression: "this.map(f, f.external_id).unique()"
+        }
+    ];
+}
+
+message AddTicketFieldsResponse {}
+
+service TicketSchema {
+    rpc GetPublishContext(GetPublishContextRequest) returns (GetPublishContextResponse);
+    // Reports the connection's custom fields whose keys collide with the
+    // integration's field mappings. Reports only -- it rejects nothing.
+    rpc ValidateConnection(ValidateConnectionRequest) returns (ValidateConnectionResponse);
+
+    // The ticketing pickers. Each is tenant-scoped and ordered by the server; no sort field is
+    // exposed. Integrations page by offset, projects by cursor, the rest return the full set.
+    rpc ListTicketIntegrations(ListTicketIntegrationsRequest) returns (ListTicketIntegrationsResponse);
+    rpc ListTicketProjects(ListTicketProjectsRequest) returns (ListTicketProjectsResponse);
+    // Upserts on (tenant, integration, external id). Partial: it adds and updates the projects
+    // named, and never removes one the request leaves out.
+    rpc AddProjects(AddProjectsRequest) returns (AddProjectsResponse);
+    rpc ListTicketIssueTypes(ListTicketIssueTypesRequest) returns (ListTicketIssueTypesResponse);
+    // Upserts on (tenant, integration, external id). The request must carry every issue type of the
+    // project: its project links are rebuilt from the request alone.
+    rpc AddIssueTypes(AddIssueTypesRequest) returns (AddIssueTypesResponse);
+    // Scoped to one (project, issue type): the join table keys on the pair.
+    rpc ListTicketStatuses(ListTicketStatusesRequest) returns (ListTicketStatusesResponse);
+    rpc GetDefaultConnectionStatusMapping(GetDefaultConnectionStatusMappingRequest) returns (GetDefaultConnectionStatusMappingResponse);
+    // Upserts on (integration, scope, external id). The request must carry every status of the
+    // project: its issue-type links are cleared and rebuilt from the request alone.
+    rpc AddTicketStatuses(AddTicketStatusesRequest) returns (AddTicketStatusesResponse);
+    // Grouped by priority field rather than returned flat: ServiceNow exposes several, and which
+    // of them combine is not derivable from the rows.
+    rpc ListTicketPriorities(ListTicketPrioritiesRequest) returns (ListTicketPrioritiesResponse);
+    rpc GetDefaultConnectionPriorityMapping(GetDefaultConnectionPriorityMappingRequest) returns (GetDefaultConnectionPriorityMappingResponse);
+    // One request carries one field of one scope, and the relink is narrowed to that pair so
+    // urgency does not erase impact's links.
+    rpc AddTicketPriorities(AddTicketPrioritiesRequest) returns (AddTicketPrioritiesResponse);
+
+    // The tenant's connections, ordered by the server; no sort field is exposed.
+    rpc ListTicketConnections(ListTicketConnectionsRequest) returns (ListTicketConnectionsResponse);
+    // Any row by id, deprecated and draft included.
+    rpc GetTicketConnection(GetTicketConnectionRequest) returns (GetTicketConnectionResponse);
+    // Every id is validated against the synced rows before writing. Always inserts: a draft the
+    // connection test filed for the same destination is not adopted -- the caller updates it by id.
+    rpc CreateTicketConnection(CreateTicketConnectionRequest) returns (CreateTicketConnectionResponse);
+    // A deprecated connection rejects every edit.
+    rpc UpdateTicketConnection(UpdateTicketConnectionRequest) returns (UpdateTicketConnectionResponse);
+    // Soft delete; a no-op on an already deprecated connection.
+    rpc DeprecateTicketConnection(DeprecateTicketConnectionRequest) returns (DeprecateTicketConnectionResponse);
+
+    rpc ListTicketFields(ListTicketFieldsRequest) returns (ListTicketFieldsResponse);
+    // Insert-if-absent on zafran_id. An external_id held by another zafran_id is rejected.
+    rpc AddTicketFields(AddTicketFieldsRequest) returns (AddTicketFieldsResponse);
+}

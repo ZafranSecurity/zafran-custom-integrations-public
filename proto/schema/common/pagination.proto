@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package remediation_db.common;
+
+option go_package = "zafran.io/remediation/db/interfaces/proto/gen/schema/common";
+
+import "buf/validate/validate.proto";
+
+// Offset pagination shared by the remediation-db list RPCs. The sort order belongs to the server, so
+// a page is fully described by where it starts and how big it is. A response carries no paging
+// metadata: fewer rows than page_size means the last page.
+message PageRequest {
+    uint64 offset = 1;
+    // 0 selects the server default.
+    uint64 page_size = 2 [(buf.validate.field).uint64.lte = 500];
+}
